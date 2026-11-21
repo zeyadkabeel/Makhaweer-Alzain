@@ -290,6 +290,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
 #sa-login input{direction:ltr;text-align:left;font-size:16px;padding:10px 12px;border:1px solid var(--cborder);border-radius:10px;background:var(--bg);color:var(--ink);font-family:inherit}
 #sa-err{color:var(--bad);font-size:14px;min-height:20px;text-align:center}
 #sa-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}
+#sa-remind{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;padding:8px 12px;border:1px solid var(--warn-line);background:var(--warn-bg);color:var(--warn);border-radius:10px;font-size:14px}
 #sa-bar .who{font-size:12px;color:var(--muted);direction:ltr}
 </style>
 </head><body>
@@ -634,7 +635,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
   }
   function describeDoc(col, d) {
     var sp = d.supplierId && state.suppliers[d.supplierId], sn = sp ? ' · ' + sp.name : '';
-    if (col === 'moves') { var it = state.items[d.itemId]; return (d.type === 'in' ? 'وارد' : d.type === 'out' ? 'صادر' : 'جرد') + ' ' + fmt(Math.abs(d.qty)) + ' ' + (it ? it.name : 'صنف') + ' (' + vlabel(d.color || DC, d.size || DS) + ')'; }
+    if (col === 'moves') { var it = state.items[d.itemId]; return (d.type === 'in' ? 'وارد' : d.type === 'out' ? (d.gift ? 'هدية دعاية' : 'صادر') : 'جرد') + ' ' + fmt(Math.abs(d.qty)) + ' ' + (it ? it.name : 'صنف') + ' (' + vlabel(d.color || DC, d.size || DS) + ')'; }
     if (col === 'money') return (d.kind === 'income' ? 'إيراد' : 'مصروف') + ' ' + fmt(d.amount) + ' ج.م · ' + (d.category || '') + (d.credit ? ' (آجل)' : '') + sn;
     if (col === 'spay') { var s2 = state.suppliers[d.supplierId]; return 'سداد مورد ' + fmt(d.amount) + ' ج.م' + (s2 ? ' · ' + s2.name : ''); }
     if (col === 'tmoves') return ({ in: 'إضافة رصيد', out: 'سحب', xfer: 'تحويل' }[d.kind || 'in']) + ' ' + fmt(d.amount) + ' ج.م';
@@ -852,12 +853,13 @@ form { display: flex; flex-direction: column; gap: 14px; }
   function dn(n) { return String(n == null ? '' : n).replace(/^\d{1,3}\s+(?=\S)/, ''); }
   function dnNote(t) { return String(t == null ? '' : t).replace(/\((\d{1,3})\s+(?=[^\s)])/g, '('); }
   function vlabel(c, s) { c = dn(c); return c + (c === DC && s === DS ? '' : ' ' + s); }
-  async function writeMove(id, it, type, q, price, date, note, rec, color, size) {
+  async function writeMove(id, it, type, q, price, date, note, rec, color, size, gift) {
     var mid = uid(), xid = rec ? uid() : '';
     var mv = {
       itemId: id, color: color, size: size, type: type, qty: type === 'out' ? -q : q, price: price,
-      cost: type === 'in' ? price : cpOf(it, color).cost, date: date, note: note || '', ts: Date.now()
+      cost: type === 'in' ? price : cpOf(it, color).cost, date: date, note: gift ? ('هدية دعاية' + (note ? ': ' + note : '')) : (note || ''), ts: Date.now()
     };
+    if (gift) mv.gift = true;
     var cid = (rec && type === 'out') ? uid() : '';
     if (rec) mv.moneyId = xid;
     if (cid) mv.cogsId = cid;
@@ -1137,7 +1139,10 @@ form { display: flex; flex-direction: column; gap: 14px; }
 
   function viewAccounts() {
     var r = range(state.period);
-    var list = arr(state.money).filter(function (x) { return inR(x.date, r); })
+    var gl = arr(state.moves).filter(function (m) { return m.gift && m.type === 'out' && inR(m.date, r); }).map(function (m) {
+      return { gm: m, kind: 'expense', category: GIFTCAT, amount: r2((-m.qty) * (m.cost || 0)), date: m.date, ts: m.ts || 0, id: 'g_' + m.id };
+    });
+    var list = arr(state.money).filter(function (x) { return inR(x.date, r); }).concat(gl)
       .sort(function (a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : (b.ts || 0) - (a.ts || 0); });
     var h = '<section class="panel" aria-labelledby="h-acc"><div class="head"><h2 id="h-acc">الإيرادات والمصروفات</h2>' +
       '<div class="btnrow"><button type="button" class="btn primary" data-act="new-money" data-kind="expense">+ مصروف</button></div></div>' +
@@ -1146,6 +1151,12 @@ form { display: flex; flex-direction: column; gap: 14px; }
       h += '<p class="empty">مفيش عمليات في الفترة دي.</p>';
     } else {
       h += '<ul class="list">' + list.map(function (x) {
+        if (x.gm) {
+          var gi = state.items[x.gm.itemId];
+          return '<li class="mrow"><div><b>' + esc(x.category) + '</b></div><div class="amt bad">−' + money(x.amount) + '</div>' +
+            '<div class="meta">هدية من المخزن · ' + esc(gi ? gi.name : 'صنف') + ' ' + esc(vlabel(x.gm.color || DC, x.gm.size || DS)) + ' × <bdi>' + fmt(-x.gm.qty) + '</bdi> · <bdi>' + showDate(x.date) + '</bdi>' + (x.gm.note ? ' · ' + esc(dnNote(x.gm.note)) : '') + '</div>' +
+            '<div class="rowact"><span class="meta">بتتلغي من حركة المخزون</span></div></li>';
+        }
         var inc = x.kind === 'income';
         return '<li class="mrow"><div><b>' + esc(x.category) + '</b></div>' +
           '<div class="amt ' + (inc ? 'good' : 'bad') + '">' + (inc ? '+' : '−') + money(x.amount) + '</div>' +
@@ -1160,7 +1171,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     return '<ul class="list">' + list.map(function (m) {
       var it = state.items[m.itemId];
       var cls = m.type === 'in' ? 'p-in' : m.type === 'out' ? 'p-sold' : 'p-adj';
-      var lbl = m.type === 'in' ? 'وارد' : m.type === 'out' ? 'صادر' : 'جرد';
+      var lbl = m.type === 'in' ? 'وارد' : m.type === 'out' ? (m.gift ? 'هدية دعاية' : 'صادر') : 'جرد';
       var vr = it ? vars(it) : null, c = m.color || DC, co0 = { hex: DHEX };
       if (vr) vr.colors.forEach(function (x) { if (x.name === c) co0 = x; });
       var who = (withItem ? '<b>' + esc(it ? it.name : 'صنف محذوف') + '</b> · ' : '') + cdot(co0, true) + ' ' + esc(dn(c)) + (m.size && m.size !== DS ? ' · <bdi>' + esc(m.size) + '</bdi>' : '');
@@ -2655,7 +2666,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     var ready = allLoaded();
     var sync = 'جاري تحميل بياناتك…';
     if (ready) {
-      if (state.mode === 'db') sync = 'أونلاين · v37 · صور ' + Object.keys(state.cphotos || {}).length + (state.loaded.cphotos ? '' : ' (بتتحمّل)');
+      if (state.mode === 'db') sync = 'أونلاين · v38 · صور ' + Object.keys(state.cphotos || {}).length + (state.loaded.cphotos ? '' : ' (بتتحمّل)');
       else sync = state.localOk ? 'بيتحفظ على الجهاز ده بس' : 'الحفظ مش شغال في المتصفح ده، والبيانات هتضيع لما تقفل الصفحة';
     }
     $('#sync').textContent = sync;
@@ -2982,7 +2993,8 @@ form { display: flex; flex-direction: column; gap: 14px; }
           '<p class="hint">الوارد بيدخل المخزن بس، ومش بيتسجل مصروف في الأرباح. التكلفة بتتسجل تلقائي تحت "تكلفة البضاعة المباعة" لما تعمل فاتورة. لو السعر اتغيّر، هيتحدّث سعر الشراء المسجل للموديل.</p>' +
           '<details class="field"><summary>اشتريتها من مورد؟ سجّل حسابه (اختياري)</summary><div style="display:grid;gap:14px;margin-top:10px">' + purchaseFieldsHtml(false) + '</div></details>'
         : '<div class="field"><label for="f-qty">الكمية</label><input id="f-qty" inputmode="decimal" autocomplete="off"></div>' +
-          '<p class="hint">الصادر ده بيخصم من المخزن بس. للبيع اعمل فاتورة.</p>';
+          '<p class="hint">الصادر ده بيخصم من المخزن بس. للبيع اعمل فاتورة.</p>' +
+          '<label style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--cborder);border-radius:10px;background:var(--soft)"><input type="checkbox" id="f-gift" style="margin-top:4px"><span><b>هدية للدعاية</b><br><span class="meta">القطعة بتتخصم من المخزن، وتتسجل مصروف دعاية بسعر شرائها (مش بتتحسب تكلفة بضاعة مباعة). اكتب اسم الشخص في الملاحظة.</span></span></label>';
     }
     return '<form id="mform" data-kind="move" data-type="' + type + '" data-id="' + it.id + '" novalidate>' +
       '<h2 id="mtitle">' + titles[type] + ': ' + esc(it.name) + '</h2>' + pick + body + dateNote() + actions('') + '</form>';
@@ -3110,7 +3122,9 @@ form { display: flex; flex-direction: column; gap: 14px; }
           if (ppaid > pdue + 0.004) { unlock(); return err('المدفوع أكبر من إجمالي الشراء (' + fmt(pdue) + ').', 'f-ppaid'); }
           if (!(pdue > 0)) { unlock(); return err('اكتب سعر الشراء عشان نحسب حساب المورد.', 'f-price'); }
         }
-        var newMid = await writeMove(id, it, type, q, price, date, note, rec, color, size);
+        var gift = type === 'out' && !!($('#f-gift') && $('#f-gift').checked);
+        if (gift && !(cpOf(it, color).cost > 0)) { unlock(); return err('سعر الشراء مش مسجل للون ده. سجّله الأول (من الألوان والمقاسات أو بوارد) عشان نحسب تكلفة الهدية.', 'f-qty'); }
+        var newMid = await writeMove(id, it, type, q, price, date, note, rec, color, size, gift);
         if (psn) await recordPurchase(psn, pdue, ppaid, $('#f-pm').value, date, note, newMid);
       }
       if (state.detail === id) state.sel = { c: color, s: size };
@@ -3132,6 +3146,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
   }
 
   /* ---------- period financials (shared by summary and reports) ---------- */
+  var GIFTCAT = 'دعاية (هدايا)';
   function periodFin(r) {
     var inc = 0, exp = 0, buys = 0, cogs = 0, cogsRet = 0, cats = {};
     arr(state.money).forEach(function (x) {
@@ -3141,8 +3156,14 @@ form { display: flex; flex-direction: column; gap: 14px; }
       else if (x.moveId || x.stock) buys += x.amount;
       else { exp += x.amount; cats[x.category] = (cats[x.category] || 0) + x.amount; }
     });
-    arr(state.moves).forEach(function (m) { if (m.type === 'out' && inR(m.date, r)) cogs += (-m.qty) * (m.cost || 0); });
-    return { inc: inc, exp: exp, buys: buys, cogs: r2(cogs + cogsRet), cats: cats };
+    var gifts = 0;
+    arr(state.moves).forEach(function (m) {
+      if (m.type !== 'out' || !inR(m.date, r)) return;
+      var c = (-m.qty) * (m.cost || 0);
+      if (m.gift) gifts += c; else cogs += c;
+    });
+    if (gifts > 0) { exp += gifts; cats[GIFTCAT] = (cats[GIFTCAT] || 0) + gifts; }
+    return { inc: inc, exp: exp, buys: buys, cogs: r2(cogs + cogsRet), gifts: r2(gifts), cats: cats };
   }
 
   /* ---------- lists shared by screens and exports ---------- */
@@ -3436,7 +3457,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
       chk.push([name, r2(exp), r2(act), d, ok ? '✓ سليم' : '✗ راجع']);
     }
     var lossAll = 0; arr(state.money).forEach(function (x) { if (x.retx && x.category === 'خسارة مرتجع تالف') lossAll += Number(x.amount) || 0; });
-    var unrec = r2(inv - (ALL.buys - ALL.cogs - lossAll + adj));
+    var unrec = r2(inv - (ALL.buys - ALL.cogs - ALL.gifts - lossAll + adj));
     var expE = r2(cap + ALL.inc - ALL.cogs - ALL.exp + adj + unrec);
     add('حقوق الملكية = رأس المال + الأرباح التراكمية + مخزون أول المدة (+ فروق الجرد)', expE, E);
     chk.push(['ملاحظة: مخزون داخل بدون قيد شراء (أول مدة) — اتحسب ضمن رأس المال', '', unrec, '', unrec > 1 ? 'ملاحظة' : unrec < -1 ? '✗ راجع' : '✓ سليم']);
@@ -3877,7 +3898,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
       });
     })).then(function () {
       return saDownload({ filename: 'daftar-backup-' + today() + '.json', data: new Blob([JSON.stringify(out)], { type: 'application/json' }) });
-    }).then(function () { toast('اتحفظت نسخة احتياطية'); })
+    }).then(function () { try { localStorage.setItem('daftar-last-backup', today()); } catch (e) {} saRemind(); toast('اتحفظت نسخة احتياطية'); })
       .catch(function (e) { toast('النسخة الاحتياطية فشلت: ' + ((e && e.code) || (e && e.message) || '')); })
       .then(function () { SA.busy = false; });
   }
@@ -3908,6 +3929,11 @@ form { display: flex; flex-direction: column; gap: 14px; }
     }).catch(function (e) { toast('الاستيراد فشل: ' + ((e && e.code) || (e && e.message) || '')); })
       .then(function () { SA.busy = false; saEl('sa-file').value = ''; });
   }
+  function saRemind() {
+    var el = saEl('sa-remind'); if (!el) return;
+    var last = ''; try { last = localStorage.getItem('daftar-last-backup') || ''; } catch (e) {}
+    el.hidden = (last === today());
+  }
   function saBar(email) {
     if (saEl('sa-bar')) { saEl('sa-bar').querySelector('.who').textContent = email || ''; return; }
     var bar = document.createElement('div'); bar.id = 'sa-bar';
@@ -3915,6 +3941,12 @@ form { display: flex; flex-direction: column; gap: 14px; }
       '<button type="button" class="btn sm ghost" id="sa-imp">استيراد</button>' +
       '<button type="button" class="btn sm ghost" id="sa-out">خروج</button><span class="who"></span>';
     saEl('sync').parentNode.appendChild(bar);
+    var rm = document.createElement('div'); rm.id = 'sa-remind'; rm.hidden = true;
+    rm.innerHTML = '<span>لسه مأخدتش نسخة احتياطية النهاردة.</span><button type="button" class="btn sm" id="sa-rbk">خدها دلوقتي</button>';
+    saEl('sync').parentNode.appendChild(rm);
+    saEl('sa-rbk').addEventListener('click', saBackup);
+    saRemind();
+    document.addEventListener('visibilitychange', function () { if (!document.hidden) saRemind(); });
     bar.querySelector('.who').textContent = email || '';
     saEl('sa-bk').addEventListener('click', saBackup);
     saEl('sa-imp').addEventListener('click', function () { saEl('sa-file').click(); });
