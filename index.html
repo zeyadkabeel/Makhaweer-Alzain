@@ -1378,7 +1378,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     var nextLbl = { new: 'اتجهز ✓', ready: 'اتغلف ✓', packed: self ? 'خرجت بيه للعميل' : 'سلّمته لشركة الشحن', shipped: 'اتسلم للعميل' }[k];
     var rcvBtn = r && !r.rcv ? '<button type="button" class="btn sm primary" data-act="ord-rcv" data-id="' + iv.id + '">استلمت المرتجع</button>' : '';
     var retBtn = k === 'shipped' ? '<button type="button" class="btn sm" data-act="ord-return" data-id="' + iv.id + '">مرتجع / رفض استلام</button>' : '';
-    var canBack = k !== 'new' && !(r && r.rcv);
+    var canBack = k !== 'new';
     var back = !canBack ? '' : '<button type="button" class="btn sm ghost" data-act="ord-back" data-id="' + iv.id + '">' + (isRet ? 'تراجع عن المرتجع' : k === 'delivered' ? 'تراجع عن التسليم' : 'رجوع خطوة') + '</button>';
     var cu = iv.customerId && state.customers[iv.customerId], cr = cu && r ? custCredit(cu.id) : 0;
     var refBtn = cr > 0.004 ? '<button type="button" class="btn sm" data-act="refund-cust" data-id="' + cu.id + '">رد فلوس للعميل (' + fmt(cr) + ')</button>' : '';
@@ -1471,11 +1471,13 @@ form { display: flex; flex-direction: column; gap: 14px; }
     } catch (e) { fail(e); state.saving = false; var b = $('#f-save'); if (b) b.disabled = false; }
   }
   async function rollbackDelivered(iv) {
-    if (iv.ret && iv.ret.rcv) { toast('المرتجع اتستلم واتفحص ورجع المخزن، مينفعش التراجع.'); return; }
     try {
       var vg = uid(), why = (iv.ret ? 'تراجع عن مرتجع الأوردر ' : 'تراجع عن تسليم الأوردر ') + invNo(iv.no), docs = [['money', iv.id + '_ship'], ['payments', iv.id + '_cod']];
       arr(state.money).forEach(function (x) { if (x.invoiceId === iv.id && x.retx) docs.push(['money', x.id]); });
       arr(state.payments).forEach(function (x) { if (x.invoiceId === iv.id && x.retx) docs.push(['payments', x.id]); });
+      arr(state.moves).forEach(function (x) { if (x.invoiceId === iv.id && x.retx) docs.push(['moves', x.id]); });
+      docs = docs.filter(function (d) { return state[d[0]][d[1]]; });
+      if (iv.ret && iv.ret.rcv) { var chk = checkChange(docs, []); if (chk.blocked) { toast(chk.blocked); return; } }
       await pool(docs.filter(function (d) { return state[d[0]][d[1]]; }).map(function (d) { return function () { return voidDoc(d[0], d[1], why, vg, describeDoc(d[0], state[d[0]][d[1]])); }; }), 3);
       var n = Object.assign(clean(iv), { ost: 'shipped' }); delete n.deliveredDate; delete n.ret;
       n.ohist = (iv.ohist || []).concat([{ st: 'shipped', date: today(), ts: Date.now() }]);
@@ -1868,11 +1870,24 @@ form { display: flex; flex-direction: column; gap: 14px; }
     return Math.round(v * 1000) / 1000;
   }
 
-  function availGetter(exceptInv) {
+  function invReserved(d, skipK) {
+    var r = {};
+    (d ? d.lines : []).forEach(function (l, j) {
+      if (j === skipK || !l.itemId || !l.color || !l.size) return;
+      var q = optNum(l.qty); if (!(q > 0)) return;
+      var k = vkey(l.itemId, l.color, l.size); r[k] = (r[k] || 0) + q;
+    });
+    return r;
+  }
+  function availGetter(exceptInv, skipK) {
     var v = stockMap().v, adj = {};
     if (exceptInv) arr(state.moves).forEach(function (m) {
       if (m.invoiceId === exceptInv) { var k = vkey(m.itemId, m.color || DC, m.size || DS); adj[k] = (adj[k] || 0) - (Number(m.qty) || 0); }
     });
+    if (typeof skipK === 'number' && state.invdraft) {
+      var rs = invReserved(state.invdraft, skipK);
+      Object.keys(rs).forEach(function (k) { adj[k] = (adj[k] || 0) - rs[k]; });
+    }
     return function (itemId, c, s) { var k = vkey(itemId, c, s); return Math.round(((v[k] || 0) + (adj[k] || 0)) * 1000) / 1000; };
   }
   function availColors(it, get, sel) {
@@ -1886,8 +1901,8 @@ form { display: flex; flex-direction: column; gap: 14px; }
     var ss = availSizes(it, l.color, get, l);
     if (ss.length === 1) l.size = ss[0];
   }
-  function autoLine(l, it, exceptInv) {
-    var get = availGetter(exceptInv), cs = availColors(it, get, '');
+  function autoLine(l, it, exceptInv, skipK) {
+    var get = availGetter(exceptInv, skipK), cs = availColors(it, get, '');
     if (cs.length === 1) { l.color = cs[0].name; l.price = String(cpOf(it, l.color).price || ''); autoSize(l, it, get); }
   }
   function colorTilesHtml(l, k, it, get) {
@@ -1906,11 +1921,11 @@ form { display: flex; flex-direction: column; gap: 14px; }
     if (!ss.length) return '<p class="meta bad">مفيش مقاسات متوفرة من اللون ده.</p>';
     return '<div class="stiles" role="group" aria-label="المقاس">' + ss.map(function (s, j) {
       return '<button type="button" class="stile" id="l-st-' + k + '-' + j + '" data-act="pick-size" data-i="' + k + '" data-v="' + esc(s) + '" aria-pressed="' + (s === l.size) + '">' +
-        '<span class="sn"><bdi>' + esc(s) + '</bdi></span><span class="sq"><bdi>' + fmt(get(it.id, l.color, s)) + '</bdi> متاح</span></button>';
+        '<span class="sn"><bdi>' + esc(s) + '</bdi></span><span class="sq"><bdi>' + fmt(Math.max(0, get(it.id, l.color, s))) + '</bdi> متاح</span></button>';
     }).join('') + '</div>';
   }
   function lineHtml(d, k, items) {
-    var l = d.lines[k], it = state.items[l.itemId], get = availGetter(d.id);
+    var l = d.lines[k], it = state.items[l.itemId], get = availGetter(d.id, k);
     var list = items.slice();
     if (it && list.indexOf(it) === -1) list.push(it);
     var itemField;
@@ -1922,9 +1937,9 @@ form { display: flex; flex-direction: column; gap: 14px; }
     }
     return '<div class="lineitem">' + itemField +
       '<div class="field"><span class="flabel">اللون</span><input type="hidden" id="l-color-' + k + '" class="linp" data-i="' + k + '" data-f="color" value="' + esc(l.color) + '">' +
-      (it ? colorTilesHtml(l, k, it, get) : '<p class="meta">اختار الصنف الأول.</p>') + '</div>' +
+      '<div id="l-ct-' + k + '">' + (it ? colorTilesHtml(l, k, it, get) : '<p class="meta">اختار الصنف الأول.</p>') + '</div></div>' +
       '<div class="field"><span class="flabel">المقاس</span><input type="hidden" id="l-size-' + k + '" class="linp" data-i="' + k + '" data-f="size" value="' + esc(l.size) + '">' +
-      (it ? sizeTilesHtml(l, k, it, get) : '<p class="meta">—</p>') + '</div>' +
+      '<div id="l-sz-' + k + '">' + (it ? sizeTilesHtml(l, k, it, get) : '<p class="meta">—</p>') + '</div></div>' +
       '<div class="row3"><div class="field"><label for="l-qty-' + k + '">الكمية</label><input id="l-qty-' + k + '" class="linp" data-i="' + k + '" data-f="qty" inputmode="decimal" value="' + esc(l.qty) + '" autocomplete="off"></div>' +
       '<div class="field"><label for="l-price-' + k + '">سعر القطعة</label><input id="l-price-' + k + '" class="linp" data-i="' + k + '" data-f="price" inputmode="decimal" value="' + esc(l.price) + '" autocomplete="off"></div>' +
       '<div class="field"><span class="flabel">إجمالي السطر</span><span class="ltot" id="l-tot-' + k + '" style="min-height:44px;display:flex;align-items:center">—</span></div></div>' +
@@ -1998,7 +2013,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     syncInv();
     var k = Number(t.dataset.i), l = state.invdraft.lines[k], it = state.items[l.itemId];
     l.color = ''; l.size = ''; l.price = '';
-    if (it) autoLine(l, it, state.invdraft.id);
+    if (it) autoLine(l, it, state.invdraft.id, k);
     paintInv(l.size ? 'l-qty-' + k : (l.color ? 'l-st-' + k + '-0' : null));
   }
   function updateCinfo() {
@@ -2018,6 +2033,14 @@ form { display: flex; flex-direction: column; gap: 14px; }
   function updateInvLive() {
     var d = state.invdraft; if (!d || !$('#v-sum')) return;
     syncInv();
+    var sig = d.lines.map(function (l) { return [l.itemId, l.color, l.size, l.qty].join('|'); }).join(';');
+    if (sig !== state.invSig) {
+      state.invSig = sig;
+      d.lines.forEach(function (l, k) {
+        var it0 = state.items[l.itemId], ct = $('#l-ct-' + k), sz = $('#l-sz-' + k); if (!it0 || !ct || !sz) return;
+        var g0 = availGetter(d.id, k); ct.innerHTML = colorTilesHtml(l, k, it0, g0); sz.innerHTML = sizeTilesHtml(l, k, it0, g0);
+      });
+    }
     var gross = 0, cogs = 0;
     d.lines.forEach(function (l, k) {
       var q = optNum(l.qty), p = optNum(l.price), it = state.items[l.itemId];
@@ -2028,7 +2051,8 @@ form { display: flex; flex-direction: column; gap: 14px; }
       if (aEl) {
         if (!it || !l.color || !l.size) { aEl.textContent = ''; aEl.className = 'meta'; }
         else {
-          var av = invAvail(it.id, l.color, l.size, d.id), over = q > av + 1e-9;
+          var rsv = invReserved(d, k)[vkey(it.id, l.color, l.size)] || 0;
+          var av = Math.max(0, Math.round((invAvail(it.id, l.color, l.size, d.id) - rsv) * 1000) / 1000), over = q > av + 1e-9;
           aEl.innerHTML = 'المتاح: <b><bdi>' + fmt(av) + '</bdi></b> قطعة' + (over ? ' · الكمية أكبر من المتاح' : '');
           aEl.className = over ? 'meta bad' : 'meta';
         }
@@ -2666,7 +2690,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     var ready = allLoaded();
     var sync = 'جاري تحميل بياناتك…';
     if (ready) {
-      if (state.mode === 'db') sync = 'أونلاين · v39 · صور ' + Object.keys(state.cphotos || {}).length + (state.loaded.cphotos ? '' : ' (بتتحمّل)');
+      if (state.mode === 'db') sync = 'أونلاين · v41 · صور ' + Object.keys(state.cphotos || {}).length + (state.loaded.cphotos ? '' : ' (بتتحمّل)');
       else sync = state.localOk ? 'بيتحفظ على الجهاز ده بس' : 'الحفظ مش شغال في المتصفح ده، والبيانات هتضيع لما تقفل الصفحة';
     }
     $('#sync').textContent = sync;
@@ -3648,7 +3672,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
       syncInv(); var k = Number(b.dataset.i), l = state.invdraft.lines[k], it = state.items[l.itemId]; if (!it) return;
       var oc = l.color; l.color = b.dataset.v; l.size = '';
       if (optNum(l.price) === cpOf(it, oc).price || !String(l.price).trim()) l.price = String(cpOf(it, l.color).price || '');
-      autoSize(l, it, availGetter(state.invdraft.id));
+      autoSize(l, it, availGetter(state.invdraft.id, k));
       if (l.size && !String(l.qty).trim()) l.qty = '1';
       paintInv(l.size ? 'l-qty-' + k : 'l-st-' + k + '-0');
     },
@@ -3682,8 +3706,10 @@ form { display: flex; flex-direction: column; gap: 14px; }
       openModal(invoiceModalHtml(), 'invoice'); updateCinfo(); updateInvLive();
     },
     'add-line': function () {
-      syncInv(); state.invdraft.lines.push(blankLine());
-      paintInv('l-item-' + (state.invdraft.lines.length - 1));
+      syncInv(); var dd = state.invdraft; dd.lines.push(blankLine());
+      var ni = dd.lines.length - 1, nl = dd.lines[ni];
+      if (nl.itemId && state.items[nl.itemId]) { nl.color = ''; nl.size = ''; nl.price = ''; autoLine(nl, state.items[nl.itemId], dd.id, ni); if (nl.size && !String(nl.qty).trim()) nl.qty = '1'; }
+      paintInv('l-item-' + ni);
     },
     'rm-line': function (b) {
       syncInv(); var d = state.invdraft; d.lines.splice(Number(b.dataset.i), 1);
@@ -3736,7 +3762,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     },
     'ord-back': function (b) {
       var iv = state.invoices[b.dataset.id]; if (!iv) return; var k = ostOf(iv);
-      if (k === 'delivered' || k === 'returned') { if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'تأكيد التراجع'; return; } rollbackDelivered(iv); return; }
+      if (k === 'delivered' || k === 'returned') { if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = (iv.ret && iv.ret.rcv) ? 'تأكيد: هيتلغي المرتجع المستلم ويرجع المخزن زي قبل' : 'تأكيد التراجع'; return; } rollbackDelivered(iv); return; }
       ordStep(iv, OSTAGES[Math.max(0, ostIdx(k) - 1)][0]);
     },
     'ord-return': function (b) { var iv = state.invoices[b.dataset.id]; if (iv) openModal(ordReturnHtml(iv), 'ordret'); },
@@ -3805,7 +3831,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     else if (state.modal === 'invoice' && t.dataset && t.dataset.f === 'code') {
       var cv = t.value.trim(); if (cv.length < 2) return;
       syncInv(); var ck = Number(t.dataset.i), cl = state.invdraft.lines[ck], cit = state.items[cl.itemId]; if (!cit) return;
-      var gt = availGetter(state.invdraft.id), cm = availColors(cit, gt, cl.color).filter(function (c) { return c.code === cv; })[0];
+      var gt = availGetter(state.invdraft.id, ck), cm = availColors(cit, gt, cl.color).filter(function (c) { return c.code === cv; })[0];
       if (cm) {
         var oc2 = cl.color; cl.color = cm.name; cl.size = '';
         if (optNum(cl.price) === cpOf(cit, oc2).price || !String(cl.price).trim()) cl.price = String(cpOf(cit, cl.color).price || '');
