@@ -2666,7 +2666,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     var ready = allLoaded();
     var sync = 'جاري تحميل بياناتك…';
     if (ready) {
-      if (state.mode === 'db') sync = 'أونلاين · v38 · صور ' + Object.keys(state.cphotos || {}).length + (state.loaded.cphotos ? '' : ' (بتتحمّل)');
+      if (state.mode === 'db') sync = 'أونلاين · v39 · صور ' + Object.keys(state.cphotos || {}).length + (state.loaded.cphotos ? '' : ' (بتتحمّل)');
       else sync = state.localOk ? 'بيتحفظ على الجهاز ده بس' : 'الحفظ مش شغال في المتصفح ده، والبيانات هتضيع لما تقفل الصفحة';
     }
     $('#sync').textContent = sync;
@@ -3475,9 +3475,14 @@ form { display: flex; flex-direction: column; gap: 14px; }
       if (Math.abs((qa[iv.id] || 0) - q) > 1e-6) { bQ++; bad1('كميات المخزون الخارجة = كميات الفاتورة', q, qa[iv.id] || 0); }
     });
     [['إجمالي الفاتورة = الأصناف − الخصم', bT], ['الإيراد المسجّل = إجمالي الفاتورة', bR], ['تكلفة المبيعات المسجّلة = تكلفة الأصناف', bC], ['كميات المخزون الخارجة = كميات الفاتورة', bQ]].forEach(function (x) { add(x[0] + ' (عدد فواتير فيها فرق، من ' + n + ')', 0, x[1], 0); });
+    var profitAll = r2(ALL.inc - ALL.cogs - ALL.exp + adj), capTotal = r2(cin + unrec);
+    var capRows = [['رأس المال (إضافات الرصيد)', r2(cin)]];
+    if (Math.abs(unrec) > 1) capRows.push(['مخزون أول المدة (بدون قيد شراء)', unrec]);
+    capRows.push(['إجمالي رأس المال (ثابت، بيتغيّر بس لما تضيف رصيد)', capTotal], ['الأرباح التراكمية (من الأول لحد دلوقتي)', profitAll], ['المسحوبات', cout ? -r2(cout) : 0], ['صافي حقوق الملكية', E]);
     var secs = [
       { title: 'قائمة الدخل · ' + PERIODS[state.period], cols: [{ h: 'البند', w: 34 }, { h: 'المبلغ (ج.م)', w: 14, n: 1 }], rows: inc },
       { title: 'المركز المالي · لحد دلوقتي', cols: [{ h: 'البند', w: 34 }, { h: 'المبلغ (ج.م)', w: 14, n: 1 }], rows: bal },
+      { title: 'رأس المال وحقوق الملكية · لحد دلوقتي', cols: [{ h: 'البند', w: 34 }, { h: 'المبلغ (ج.م)', w: 14, n: 1 }], rows: capRows },
       { title: 'مراجعة المعادلات (الفرق المسموح ١ جنيه)', cols: [{ h: 'المعادلة', w: 44 }, { h: 'المتوقع', w: 12, n: 1 }, { h: 'الفعلي', w: 12, n: 1 }, { h: 'الفرق', w: 10, n: 1 }, { h: 'النتيجة', w: 10 }], rows: chk }
     ];
     if (row.length) secs.push({ title: 'الفواتير اللي فيها فرق', cols: [{ h: 'الفاتورة', w: 9 }, { h: 'المعادلة', w: 38 }, { h: 'المتوقع', w: 11, n: 1 }, { h: 'الفعلي', w: 11, n: 1 }, { h: 'الفرق', w: 10, n: 1 }], rows: row });
