@@ -1974,6 +1974,12 @@ form { display: flex; flex-direction: column; gap: 14px; }
     if ($('#v-shiplbl')) $('#v-shiplbl').textContent = m === 'self' ? 'مصاريف المواصلات (ج.م)' : 'مبلغ الشحن (ج.م)';
   }
   function shipNames() { var u = {}; arr(state.invoices).forEach(function (i) { if (i.shipco) u[i.shipco] = 1; }); return Object.keys(u).sort(); }
+  function retQtyOf(iv, k) { var q = 0; if (iv && iv.ret) (iv.ret.lines || []).forEach(function (x) { if (x.k === k) q += x.qty; }); return q; }
+  function retTag(d, k) {
+    var iv = d && d.id ? state.invoices[d.id] : null, q = retQtyOf(iv, k); if (!(q > 0)) return '';
+    var l = iv.lines[k], all = q >= l.qty - 1e-9;
+    return '<div class="notice" style="display:block;margin:0 0 -6px"><b class="bad">↩ مرتجع' + (all ? ' (الصنف كله)' : ' · ' + fmt(q) + ' من ' + fmt(l.qty)) + '</b>' + (iv.ret.rcv ? ' · اتستلم واتفحص' : ' · لسه ماتستلمش') + '</div>';
+  }
   function invoiceModalHtml() {
     var d = state.invdraft, add = !d.id, items = arr(state.items).filter(function (i) { return !i.archived; }).sort(byName);
     var clist = arr(state.customers).sort(byName).map(function (c) { return '<option value="' + esc(c.name) + '">' + esc(custCode(c)) + '</option>'; }).join('');
@@ -1983,7 +1989,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
       '<div class="row2"><div class="field"><label for="v-cname">اسم العميل (اختياري)</label><input id="v-cname" list="v-clist" value="' + esc(d.cname) + '" autocomplete="off"><datalist id="v-clist">' + clist + '</datalist></div>' +
       '<div class="field"><label for="v-phone">الموبايل (اختياري)</label><input id="v-phone" inputmode="tel" value="' + esc(d.phone) + '" autocomplete="off"></div></div>' +
       '<p class="meta" id="v-cinfo" style="margin-top:-6px"></p>' +
-      '<div class="field"><span class="flabel">الأصناف</span><div id="v-lines" style="display:grid;gap:12px">' + d.lines.map(function (l, k) { return lineHtml(d, k, items); }).join('') + '</div>' +
+      '<div class="field"><span class="flabel">الأصناف</span><div id="v-lines" style="display:grid;gap:12px">' + d.lines.map(function (l, k) { return retTag(d, k) + lineHtml(d, k, items); }).join('') + '</div>' +
       '<div><button type="button" class="btn sm" data-act="add-line">+ إضافة صنف</button></div></div>' +
       '<div class="row2"><div class="field"><label for="v-disc">خصم (ج.م)</label><input id="v-disc" inputmode="decimal" placeholder="0" value="' + esc(d.discount) + '" autocomplete="off"></div>' +
       '<div class="field"><label for="v-note">ملاحظة</label><input id="v-note" value="' + esc(d.note) + '" autocomplete="off"></div></div>' +
@@ -2645,7 +2651,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
       var cobj = it ? (it.colors || []).filter(function (c) { return c.name === l.color; })[0] : null;
       var im = cobj && cobj.photo ? '<img src="' + esc(cobj.photo) + '" style="width:40px;height:40px;object-fit:cover;border-radius:6px;flex:none" alt="">' : '';
       return '<div style="display:flex;align-items:center;gap:8px;padding:7px 8px;' + (k % 2 === 0 ? 'background:' + TINT + ';border-radius:8px;' : '') + 'margin-top:4px">' + im +
-        '<span style="flex:1">' + esc(nm) + '<br><span style="font-size:12px;color:' + MU + '">' + fmt(l.price) + ' ج.م للقطعة</span></span>' +
+        '<span style="flex:1">' + esc(nm) + (retQtyOf(iv, k) > 0 ? ' <b style="color:#b3402a">(مرتجع ' + fmt(retQtyOf(iv, k)) + ')</b>' : '') + '<br><span style="font-size:12px;color:' + MU + '">' + fmt(l.price) + ' ج.م للقطعة</span></span>' +
         '<span style="width:34px;text-align:center">' + fmt(l.qty) + '</span><span style="width:64px;text-align:left;font-weight:600">' + fmt(r2(l.qty * l.price)) + '</span></div>';
     }).join('');
     var tl = function (a, b, strong) { return '<div style="display:flex;justify-content:space-between;' + (strong ? 'font-weight:700;font-size:16px;' : '') + '"><span>' + a + '</span><span>' + b + '</span></div>'; };
@@ -2720,7 +2726,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     var ready = allLoaded();
     var sync = 'جاري تحميل بياناتك…';
     if (ready) {
-      if (state.mode === 'db') sync = 'أونلاين · v43 · صور ' + Object.keys(state.cphotos || {}).length + (state.loaded.cphotos ? '' : ' (بتتحمّل)');
+      if (state.mode === 'db') sync = 'أونلاين · v44 · صور ' + Object.keys(state.cphotos || {}).length + (state.loaded.cphotos ? '' : ' (بتتحمّل)');
       else sync = state.localOk ? 'بيتحفظ على الجهاز ده بس' : 'الحفظ مش شغال في المتصفح ده، والبيانات هتضيع لما تقفل الصفحة';
     }
     $('#sync').textContent = sync;
