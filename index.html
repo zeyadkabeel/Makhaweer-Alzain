@@ -1538,6 +1538,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
         var it = state.items[l.itemId];
         return '<li class="mrow"><div>' + esc(it ? it.name : 'صنف') + ' · ' + esc(vlabel(l.color, l.size)) + '<div class="meta">اتباع <bdi>' + fmt(l.qty) + '</bdi></div></div><div class="field" style="margin:0;width:90px"><input id="rt-' + k + '" inputmode="decimal" aria-label="الكمية الراجعة" value="' + l.qty + '" autocomplete="off"></div></li>';
       }).join('') + '</ul>' +
+      '<div class="field"><label for="rt-val">قيمة المرتجع (ج.م) · سيبها فاضية = تلقائي بنسبة الخصم</label><input id="rt-val" inputmode="decimal" placeholder="تلقائي" autocomplete="off"></div><p class="meta" id="rt-hint"></p>' +
       '<div class="field"><label for="rt-fee">مصروف الشحن (مبدئيًا نفس مبلغ الشحن، عدّله لو مختلف)</label><input id="rt-fee" inputmode="decimal" value="' + (iv.ship || 0) + '" autocomplete="off"></div>' +
       (self ? methodSel('rt-fm', 'cash', 'مصروف المواصلات اتدفع من') : '<p class="meta">مصروف الشحن بيتسجّل «شحن - لم يتم التسليم» ومستحق لـ ' + esc(iv.shipco || '') + '.</p>') +
       '<div class="field"><label for="rt-cod">لو العميل استلم جزء: المتحصّل منه (سيبه فاضي = كل المتبقي)</label><input id="rt-cod" inputmode="decimal" placeholder="تلقائي" autocomplete="off"></div>' +
@@ -1545,6 +1546,21 @@ form { display: flex; flex-direction: column; gap: 14px; }
       '<p class="meta">الإيراد الأصلي بيفضل زي ما هو، وبينزل إيراد جديد بالسالب بقيمة المرتجع. فلوس العميل المدفوعة مقدم بتتحوّل رصيد على حسابه.</p>' +
       '<p class="err" id="merr" role="alert"></p><div class="mact"><button type="submit" class="btn danger" id="f-save">تأكيد المرتجع</button><button type="button" class="btn" data-act="close">رجوع</button></div></form>';
     return h;
+  }
+  function retCalc(iv) {
+    var gross = 0, rq = 0, sq = 0, full0 = 0, prop = 0, cost = 0;
+    iv.lines.forEach(function (l) { gross += l.qty * l.price; sq += l.qty; });
+    var ratio = gross > 0 ? (iv.total || 0) / gross : 1;
+    iv.lines.forEach(function (l, k) { var e = $('#rt-' + k), q = e ? optNum(e.value) : 0; if (isNaN(q) || q < 0) q = 0; if (q > l.qty) q = l.qty; rq += q; full0 += q * l.price; prop += q * l.price * ratio; cost += q * (l.cost || 0); });
+    var full = rq > 0 && Math.abs(rq - sq) < 1e-9;
+    return { rq: rq, full: full, prop: full ? r2(iv.total || 0) : r2(prop), fullPrice: r2(full0), cost: r2(cost) };
+  }
+  function updateRetHint() {
+    var iv = state.invoices[state.ordctx], h = $('#rt-hint'); if (!iv || !h) return;
+    var c = retCalc(iv); if (!(c.rq > 0)) { h.textContent = ''; return; }
+    var ov = $('#rt-val') ? $('#rt-val').value.trim() : '', v = c.full ? c.prop : (ov !== '' && !isNaN(optNum(ov)) ? r2(optNum(ov)) : c.prop);
+    var rem = Math.max(0, r2((iv.total || 0) - v - invPaid(iv)));
+    h.innerHTML = 'بنسبة الخصم: <b><bdi>' + fmt(c.prop) + '</bdi></b> · بسعر القطع كامل: <b><bdi>' + fmt(c.fullPrice) + '</bdi></b> · تكلفة الراجع: <bdi>' + fmt(c.cost) + '</bdi><br>المتبقي على العميل بعد المرتجع بالقيمة دي: <b class="' + (rem > 0.004 ? 'bad' : 'good') + '"><bdi>' + fmt(rem) + '</bdi></b> ج.م';
   }
   async function saveOrdReturn() {
     var iv = state.invoices[state.ordctx]; if (!iv) { closeModal(); return; }
@@ -1560,6 +1576,8 @@ form { display: flex; flex-direction: column; gap: 14px; }
     }
     if (!(rq > 0)) return err('اكتب كمية الراجع لقطعة واحدة على الأقل.');
     var full = Math.abs(rq - sq) < 1e-9; val = full ? r2(iv.total || 0) : r2(val);
+    var ovs = $('#rt-val') ? $('#rt-val').value.trim() : '';
+    if (!full && ovs !== '') { var ovn = optNum(ovs); if (isNaN(ovn) || ovn < 0 || ovn > (iv.total || 0) + 0.004) return err('قيمة المرتجع لازم تكون من صفر لـ ' + fmt(iv.total || 0) + '.', 'rt-val'); val = r2(ovn); }
     var fee = $('#rt-fee').value.trim() === '' ? 0 : optNum($('#rt-fee').value);
     if (isNaN(fee) || fee < 0) return err('مصروف الشحن لازم يكون رقم.', 'rt-fee');
     var net = r2((iv.total || 0) - val), paid = invPaid(iv), rem = Math.max(0, r2(net - paid)), amt = 0;
@@ -1981,7 +1999,10 @@ form { display: flex; flex-direction: column; gap: 14px; }
       '<div class="line sm"><dt>المدفوع</dt><dd id="v-paidshow">—</dd></div>' +
       '<div class="line"><dt>المطلوب تحصيله عند الاستلام</dt><dd id="v-due">—</dd></div>' +
       '<div class="line sm"><dt>تكلفة البضاعة المباعة</dt><dd id="v-cogs">—</dd></div>' +
-      '<div class="line sm"><dt>ربح الفاتورة</dt><dd id="v-profit">—</dd></div></dl>' +
+      '<div class="line sm"><dt>ربح الفاتورة</dt><dd id="v-profit">—</dd></div>' +
+      '<div class="line sm" id="v-ret1" hidden><dt>مرتجع (قيمة بيع)</dt><dd id="v-retv">—</dd></div>' +
+      '<div class="line sm" id="v-ret2" hidden><dt>مرتجع (قيمة شراء / تكلفة)</dt><dd id="v-retc">—</dd></div>' +
+      '<div class="line total" id="v-ret3" hidden><dt>ربح الفاتورة بعد المرتجع</dt><dd id="v-retp">—</dd></div></dl>' +
       payBlockHtml(d) +
       '<p class="hint" style="margin-top:-4px">' + (add ? 'بمجرد الحفظ: الصافي بيتسجل في الإيرادات، والقطع بتتخصم من المخزون، وتكلفتها بتتسجل في المصروفات تحت "تكلفة البضاعة المباعة".' : 'أي تعديل بيتحدّث تلقائي في الإيرادات والمخزون والمصروفات.') + '</p>' +
       '<p class="err" id="merr" role="alert"></p><div class="mact"><button type="submit" class="btn primary" id="f-save">حفظ الفاتورة</button>' +
@@ -2067,7 +2088,16 @@ form { display: flex; flex-direction: column; gap: 14px; }
     var paidNow;
     if (!d.id) { paidNow = optNum(d.paid); if (isNaN(paidNow)) paidNow = 0; if (!String(d.cname).trim() && paidNow <= 0.004) paidNow = Math.max(0, net); paidNow += creditUseOf(d); }
     else { var od = state.invoices[d.id]; paidNow = od ? (od.pm ? invPaid(od) : Math.max(0, net)) : 0; }
-    var dueNow = r2(Math.max(0, net) - paidNow);
+    var odr = d.id ? state.invoices[d.id] : null, rv = odr && odr.ret ? retValue(odr) : 0;
+    ['v-ret1', 'v-ret2', 'v-ret3'].forEach(function (i) { var e = $('#' + i); if (e) e.hidden = !odr || !odr.ret; });
+    if (odr && odr.ret) {
+      var rc = 0; (odr.ret.lines || []).forEach(function (x) { var ol = odr.lines[x.k]; if (ol) rc += x.qty * (ol.cost || 0); });
+      var rl = Number(odr.ret.loss) || 0, np = r2((net - rv) - (cogs - rc) - rl);
+      $('#v-retv').innerHTML = '<span class="bad">− ' + money(r2(rv)) + '</span>';
+      $('#v-retc').innerHTML = money(r2(rc)) + (rl > 0.004 ? ' · خسارة تالف ' + money(r2(rl)) : '');
+      $('#v-retp').innerHTML = '<span class="' + (np < 0 ? 'bad' : 'good') + '">' + signed(np) + '</span>';
+    }
+    var dueNow = r2(Math.max(0, net - rv) - paidNow);
     $('#v-paidshow').innerHTML = money(r2(paidNow));
     $('#v-due').innerHTML = '<span class="' + (dueNow > 0.004 ? 'bad' : 'good') + '">' + money(Math.max(0, dueNow)) + '</span>';
   }
@@ -2627,7 +2657,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
       '<div style="border-top:2px dashed ' + GD + ';margin:12px 0 8px"></div>' +
       '<div style="display:flex;justify-content:space-between;font-size:12px;color:' + GT + ';font-weight:700"><span style="flex:1">الصنف</span><span style="width:34px;text-align:center">كمية</span><span style="width:64px;text-align:left">الإجمالي</span></div>' + rows +
       '<div style="border-top:2px dashed ' + GD + ';margin:14px 0 8px"></div>' +
-      tl('إجمالي الأصناف', fmt(r2(iv.gross || 0))) + (iv.discount > 0 ? tl('الخصم', '− ' + fmt(iv.discount)) : '') + tl('الصافي', fmt(iv.total || 0) + ' ج.م', true) + tl('المدفوع', fmt(paid)) +
+      tl('إجمالي الأصناف', fmt(r2(iv.gross || 0))) + (iv.discount > 0 ? tl('الخصم', '− ' + fmt(iv.discount)) : '') + tl('الصافي', fmt(iv.total || 0) + ' ج.م', true) + (retValue(iv) > 0.004 ? tl('مرتجع', '− ' + fmt(r2(retValue(iv)))) : '') + tl('المدفوع', fmt(paid)) +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;background:' + BOX + ';color:#ffffff;border-radius:12px;padding:10px 14px"><span style="font-weight:700;color:#ffffff">' + (rem > 0.004 ? 'المطلوب' : 'الفاتورة مسدّدة') + '</span><span style="font-family:\'Readex Pro\',sans-serif;font-size:22px;font-weight:700;color:#ffffff">' + (rem > 0.004 ? fmt(rem) + ' ج.م' : '✓') + '</span></div>' +
       (iv.note ? '<div style="margin-top:12px;font-size:13px"><span style="color:' + MU + '">ملاحظات:</span> ' + esc(iv.note) + '</div>' : '') +
       '<div style="margin-top:18px;text-align:center;font-size:13px;color:' + MU + '">شكراً لتعاملكم مع مخاوير الزين</div></div></div>';
@@ -2690,7 +2720,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     var ready = allLoaded();
     var sync = 'جاري تحميل بياناتك…';
     if (ready) {
-      if (state.mode === 'db') sync = 'أونلاين · v41 · صور ' + Object.keys(state.cphotos || {}).length + (state.loaded.cphotos ? '' : ' (بتتحمّل)');
+      if (state.mode === 'db') sync = 'أونلاين · v43 · صور ' + Object.keys(state.cphotos || {}).length + (state.loaded.cphotos ? '' : ' (بتتحمّل)');
       else sync = state.localOk ? 'بيتحفظ على الجهاز ده بس' : 'الحفظ مش شغال في المتصفح ده، والبيانات هتضيع لما تقفل الصفحة';
     }
     $('#sync').textContent = sync;
@@ -3765,7 +3795,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
       if (k === 'delivered' || k === 'returned') { if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = (iv.ret && iv.ret.rcv) ? 'تأكيد: هيتلغي المرتجع المستلم ويرجع المخزن زي قبل' : 'تأكيد التراجع'; return; } rollbackDelivered(iv); return; }
       ordStep(iv, OSTAGES[Math.max(0, ostIdx(k) - 1)][0]);
     },
-    'ord-return': function (b) { var iv = state.invoices[b.dataset.id]; if (iv) openModal(ordReturnHtml(iv), 'ordret'); },
+    'ord-return': function (b) { var iv = state.invoices[b.dataset.id]; if (iv) openModal(ordReturnHtml(iv), 'ordret'); updateRetHint(); },
     'ord-rcv': function (b) { var iv = state.invoices[b.dataset.id]; if (iv && iv.ret && !iv.ret.rcv) openModal(ordRcvHtml(iv), 'ordrcv'); },
     'ord-settle': function (b) { openModal(settleHtml(b.dataset.co), 'ordsettle'); },
     'edit-cust': function (b) { var c = state.customers[b.dataset.id]; if (c) openModal(custModalHtml(c), 'cust'); },
@@ -3840,6 +3870,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
         paintInv(cl.size ? 'l-qty-' + ck : 'l-st-' + ck + '-0');
       }
     }
+    else if (state.modal === 'ordret') { updateRetHint(); }
     else if (state.modal === 'ordrcv') { if (t.id === 'r-loss') t.dataset.man = '1'; updateRcv(); }
     else if (state.modal === 'invoice') { if (t.id === 'v-cname') updateCinfo(); updateInvLive(); }
     else if (t.closest && t.closest('#mform')) { updateTotal(); }
