@@ -291,6 +291,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
 #sa-err{color:var(--bad);font-size:14px;min-height:20px;text-align:center}
 #sa-bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:6px}
 #sa-remind{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-top:8px;padding:8px 12px;border:1px solid var(--warn-line);background:var(--warn-bg);color:var(--warn);border-radius:10px;font-size:14px}
+#sa-off{margin-top:8px;padding:8px 12px;border:1px solid var(--warn-line);background:var(--warn-bg);color:var(--warn);border-radius:10px;font-size:13px}
 #sa-bar .who{font-size:12px;color:var(--muted);direction:ltr}
 </style>
 </head><body>
@@ -551,6 +552,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
       var m = {};
       snap.docs.forEach(function (d) { m[d.id] = Object.assign({}, d.data(), { id: d.id }); });
       state.raw[col] = m; refilter(col); state.loaded[col] = true;
+      try { state.pend = state.pend || {}; state.pend[col] = snap.docs.filter(function (d) { return d.metadata && d.metadata.hasPendingWrites; }).length; saOffUI(); } catch (e) {}
       if (col === 'cphotos') refilter('items');
       if (col === 'items' || col === 'cphotos') mergePhotos();
       if (allLoaded()) { clearTimeout(state.timer); state.slow = false; }
@@ -583,16 +585,23 @@ form { display: flex; flex-direction: column; gap: 14px; }
       if (!c.photo) continue;
       var k = phKey(id, c.name); keep[k] = 1;
       var old = state.cphotos[k];
-      if (!old || old.photo !== c.photo) await state.db.collection('cphotos').doc(k).set({ itemId: id, color: c.name, photo: c.photo });
+      if (!old || old.photo !== c.photo) await ack(state.db.collection('cphotos').doc(k).set({ itemId: id, color: c.name, photo: c.photo }));
     }
     var nd = Object.assign({}, data, { colors: cols.map(function (c) { var o = Object.assign({}, c); delete o.photo; return o; }) });
-    await state.db.collection('items').doc(id).set(nd);
+    await ack(state.db.collection('items').doc(id).set(nd));
     var gone = Object.keys(state.cphotos).filter(function (k) { return state.cphotos[k].itemId === id && !keep[k]; });
-    await pool(gone.map(function (k) { return function () { return state.db.collection('cphotos').doc(k).delete(); }; }), 3);
+    await pool(gone.map(function (k) { return function () { return ack(state.db.collection('cphotos').doc(k).delete()); }; }), 3);
+  }
+  function ack(pr) { if (SA.online === false) { try { pr.catch(function () {}); } catch (e) {} return Promise.resolve(); } return pr; }
+  function offBlock(what) {
+    if (SA.online !== false) return false;
+    toast('إنت أوفلاين. ' + what + ' مقفولة لحد ما النت يرجع، عشان المخزون والترقيم ما يتلخبطوش.');
+    return true;
   }
   function put(col, id, data) {
+    try { if (SA && SA.user && SA.user.email) data = Object.assign({}, data, { by: String(SA.user.email).split('@')[0] }); } catch (e) {}
     if (state.mode === 'db' && col === 'items') return putItem(id, data);
-    if (state.mode === 'db') return state.db.collection(col).doc(id).set(data);
+    if (state.mode === 'db') return ack(state.db.collection(col).doc(id).set(data));
     state.raw[col] = state.raw[col] || {};
     state.raw[col][id] = Object.assign({}, data, { id: id });
     refilter(col);
@@ -600,7 +609,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     return Promise.resolve();
   }
   function del(col, id) {
-    if (state.mode === 'db') return state.db.collection(col).doc(id).delete();
+    if (state.mode === 'db') return ack(state.db.collection(col).doc(id).delete());
     if (state.raw[col]) delete state.raw[col][id];
     refilter(col);
     persistLocal();
@@ -780,6 +789,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     return Object.keys(g).map(function (k) { return g[k]; }).sort(function (a, b) { return b.ts - a.ts; });
   }
   async function restoreGroup(vg) {
+    if (offBlock('استرجاع العمليات')) return;
     var g = voidGroups().filter(function (x) { return x.vg === vg; })[0];
     if (!g || g.sys) return;
     var adds = g.docs.map(function (d) { var n = Object.assign({}, d[2]); ['void', 'voidReason', 'voidDate', 'voidTs', 'vg', 'vlabel'].forEach(function (k) { delete n[k]; }); return [d[0], n]; });
@@ -824,7 +834,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     var A = arr(state.audit).sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); }).slice(0, 50);
     if (!A.length) h += '<p class="empty">لسه مفيش عمليات مسجلة.</p>';
     else h += '<ul class="list">' + A.map(function (a) {
-      return '<li class="mrow"><div class="meta" style="grid-column:1/-1">' + esc(a.text || '') + '</div><div class="meta" style="grid-column:1/-1"><bdi>' + showDate(a.date) + '</bdi>' + (a.reason ? ' · السبب: ' + esc(a.reason) : '') + '</div></li>';
+      return '<li class="mrow"><div class="meta" style="grid-column:1/-1">' + esc(a.text || '') + '</div><div class="meta" style="grid-column:1/-1"><bdi>' + showDate(a.date) + '</bdi>' + (a.by ? ' · بواسطة ' + esc(a.by) : '') + (a.reason ? ' · السبب: ' + esc(a.reason) : '') + '</div></li>';
     }).join('') + '</ul>';
     return h + '</section>';
   }
@@ -1471,6 +1481,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     } catch (e) { fail(e); state.saving = false; var b = $('#f-save'); if (b) b.disabled = false; }
   }
   async function rollbackDelivered(iv) {
+    if (offBlock('التراجع عن التسليم والمرتجع')) return;
     try {
       var vg = uid(), why = (iv.ret ? 'تراجع عن مرتجع الأوردر ' : 'تراجع عن تسليم الأوردر ') + invNo(iv.no), docs = [['money', iv.id + '_ship'], ['payments', iv.id + '_cod']];
       arr(state.money).forEach(function (x) { if (x.invoiceId === iv.id && x.retx) docs.push(['money', x.id]); });
@@ -1974,6 +1985,22 @@ form { display: flex; flex-direction: column; gap: 14px; }
     if ($('#v-shiplbl')) $('#v-shiplbl').textContent = m === 'self' ? 'مصاريف المواصلات (ج.م)' : 'مبلغ الشحن (ج.م)';
   }
   function shipNames() { var u = {}; arr(state.invoices).forEach(function (i) { if (i.shipco) u[i.shipco] = 1; }); return Object.keys(u).sort(); }
+  function waText(iv) {
+    var L = ['*مخاوير الزين* · فاتورة ' + invNo(iv.no), 'التاريخ: ' + showDate(iv.date), ''];
+    (iv.lines || []).forEach(function (l, k) {
+      var it = state.items[l.itemId], rq = retQtyOf(iv, k);
+      L.push('• ' + (it ? it.name : 'صنف') + ' (' + vlabel(l.color, l.size) + ') × ' + fmt(l.qty) + ' = ' + fmt(r2(l.qty * l.price)) + (rq > 0 ? ' ↩ مرتجع ' + fmt(rq) : ''));
+    });
+    L.push('');
+    L.push('إجمالي الأصناف: ' + fmt(r2(iv.gross || 0)));
+    if (iv.discount > 0) L.push('الخصم: ' + fmt(iv.discount));
+    L.push('الصافي: ' + fmt(iv.total || 0));
+    if (retValue(iv) > 0.004) L.push('المرتجع: ' + fmt(r2(retValue(iv))));
+    L.push('المدفوع: ' + fmt(invPaid(iv)));
+    var rem = invRemain(iv); L.push(rem > 0.004 ? 'المطلوب: ' + fmt(rem) + ' ج.م' : 'الحساب خالص ✅');
+    L.push('', 'شكرًا لتعاملكم مع مخاوير الزين');
+    return L.join('\n');
+  }
   function retQtyOf(iv, k) { var q = 0; if (iv && iv.ret) (iv.ret.lines || []).forEach(function (x) { if (x.k === k) q += x.qty; }); return q; }
   function retTag(d, k) {
     var iv = d && d.id ? state.invoices[d.id] : null, q = retQtyOf(iv, k); if (!(q > 0)) return '';
@@ -2009,11 +2036,11 @@ form { display: flex; flex-direction: column; gap: 14px; }
       '<div class="line sm" id="v-ret1" hidden><dt>مرتجع (قيمة بيع)</dt><dd id="v-retv">—</dd></div>' +
       '<div class="line sm" id="v-ret2" hidden><dt>مرتجع (قيمة شراء / تكلفة)</dt><dd id="v-retc">—</dd></div>' +
       '<div class="line total" id="v-ret3" hidden><dt>ربح الفاتورة بعد المرتجع</dt><dd id="v-retp">—</dd></div></dl>' +
-      payBlockHtml(d) +
+      payBlockHtml(d) + (!add && state.invoices[d.id] && state.invoices[d.id].by ? '<p class="meta">آخر تسجيل أو تعديل بواسطة: <b>' + esc(state.invoices[d.id].by) + '</b></p>' : '') +
       '<p class="hint" style="margin-top:-4px">' + (add ? 'بمجرد الحفظ: الصافي بيتسجل في الإيرادات، والقطع بتتخصم من المخزون، وتكلفتها بتتسجل في المصروفات تحت "تكلفة البضاعة المباعة".' : 'أي تعديل بيتحدّث تلقائي في الإيرادات والمخزون والمصروفات.') + '</p>' +
       '<p class="err" id="merr" role="alert"></p><div class="mact"><button type="submit" class="btn primary" id="f-save">حفظ الفاتورة</button>' +
       '<button type="button" class="btn" data-act="close">إلغاء</button>' +
-      (add ? '' : (state.downloads ? '<button type="button" class="btn" data-act="inv-pdf" data-id="' + d.id + '">PDF</button>' : '') + '<button type="button" class="btn danger" data-act="inv-cancel" data-id="' + d.id + '">إلغاء الفاتورة</button>') + '</div></form>';
+      (add ? '' : (state.downloads ? '<button type="button" class="btn" data-act="inv-pdf" data-id="' + d.id + '">PDF</button>' : '') + '<button type="button" class="btn" data-act="inv-wa" data-id="' + d.id + '">واتساب</button>' + '<button type="button" class="btn danger" data-act="inv-cancel" data-id="' + d.id + '">إلغاء الفاتورة</button>') + '</div></form>';
   }
 
   function syncInv() {
@@ -2726,7 +2753,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     var ready = allLoaded();
     var sync = 'جاري تحميل بياناتك…';
     if (ready) {
-      if (state.mode === 'db') sync = 'أونلاين · v44 · صور ' + Object.keys(state.cphotos || {}).length + (state.loaded.cphotos ? '' : ' (بتتحمّل)');
+      if (state.mode === 'db') sync = 'أونلاين · v46 · صور ' + Object.keys(state.cphotos || {}).length + (state.loaded.cphotos ? '' : ' (بتتحمّل)');
       else sync = state.localOk ? 'بيتحفظ على الجهاز ده بس' : 'الحفظ مش شغال في المتصفح ده، والبيانات هتضيع لما تقفل الصفحة';
     }
     $('#sync').textContent = sync;
@@ -3424,6 +3451,18 @@ form { display: flex; flex-direction: column; gap: 14px; }
     secs.push({ title: 'المرتجعات حسب السبب', cols: [{ h: 'السبب', w: 20 }, { h: 'العدد', w: 8, n: 1 }, { h: 'قيمة المرتجع', w: 14, n: 1 }, { h: 'خسارة تالف', w: 14, n: 1 }], rows: rr, totals: ['الإجمالي', TR.n, r2(TR.v), r2(TR.l)] });
     if (rets.length) secs.push({ title: 'تفاصيل المرتجعات', cols: [{ h: 'الفاتورة', w: 9 }, { h: 'التاريخ', w: 13 }, { h: 'العميل', w: 18 }, { h: 'الشركة', w: 13 }, { h: 'السبب', w: 12 }, { h: 'القيمة', w: 10, n: 1 }, { h: 'الاستلام', w: 14 }, { h: 'خسارة', w: 10, n: 1 }],
       rows: rets.sort(function (a, b) { return (b.no || 0) - (a.no || 0); }).map(function (iv) { return [invNo(iv.no), showDate(iv.ret.date || iv.date), custNameOf(iv) || 'عميل نقدي', iv.shipco || '', iv.ret.reason || 'مرتجع', r2(retValue(iv)), iv.ret.rcv ? 'اتستلم' : 'لسه', r2(Number(iv.ret.loss) || 0)]; }) });
+    var bi = {}, bc = {}, soldV = 0;
+    arr(state.invoices).forEach(function (iv) { if (iv.status !== 'cancelled' && inR(iv.date, r)) soldV += iv.total || 0; });
+    rets.forEach(function (iv) {
+      var gr = 0; iv.lines.forEach(function (l) { gr += l.qty * l.price; }); var ra = gr > 0 ? (iv.total || 0) / gr : 1;
+      (iv.ret.lines || []).forEach(function (x) { var l = iv.lines[x.k]; if (!l) return; var it = state.items[l.itemId], k = (it ? it.name : 'صنف') + ' · ' + vlabel(l.color, l.size), b = bi[k] || (bi[k] = { q: 0, v: 0 }); b.q += x.qty; b.v += x.qty * l.price * ra; });
+      var cn = custNameOf(iv) || 'عميل نقدي', c = bc[cn] || (bc[cn] = { n: 0, v: 0 }); c.n++; c.v += retValue(iv);
+    });
+    secs.push({ title: 'ملخص نسبة المرتجع', cols: [{ h: 'البند', w: 30 }, { h: 'القيمة', w: 14, n: 1 }], rows: [['مبيعات الفترة (الصافي)', r2(soldV)], ['قيمة المرتجعات', r2(TR.v)], ['نسبة المرتجع من المبيعات %', soldV > 0 ? r2(TR.v / soldV * 100) : 0]] });
+    var bir = Object.keys(bi).map(function (k) { return [k, r2(bi[k].q), r2(bi[k].v)]; }).sort(function (a, b) { return b[1] - a[1]; });
+    if (bir.length) secs.push({ title: 'الأكتر رجوعًا (أصناف)', cols: [{ h: 'الصنف', w: 30 }, { h: 'الكمية الراجعة', w: 12, n: 1 }, { h: 'القيمة', w: 12, n: 1 }], rows: bir.slice(0, 10) });
+    var bcr = Object.keys(bc).map(function (k) { return [k, bc[k].n, r2(bc[k].v)]; }).sort(function (a, b) { return b[1] - a[1] || b[2] - a[2]; });
+    if (bcr.length) secs.push({ title: 'العملاء الأكتر مرتجعًا', cols: [{ h: 'العميل', w: 24 }, { h: 'عدد المرتجعات', w: 12, n: 1 }, { h: 'القيمة', w: 12, n: 1 }], rows: bcr.slice(0, 10) });
     return mkDs({
       title: 'تقرير الشحن والمرتجعات', file: 'تقرير الشحن - ' + PERIODS[state.period], sheet: 'الشحن', sub: PERIODS[state.period] + ' · الرصيد مع الشركات حالي',
       kpi: [['أوردرات', '<bdi>' + T.o + '</bdi>', ''], ['مرتجعات', String(T.rt), T.rt ? 'bad' : ''], ['نسبة المرتجع', (T.o ? r2(T.rt / T.o * 100) : 0) + '%', '']], sections: secs
@@ -3696,6 +3735,16 @@ form { display: flex; flex-direction: column; gap: 14px; }
     'rmore': function () { state.rlimit = 100000; render(); },
     'rless': function () { state.rlimit = 8; render(); },
     'cat': function (b) { state.cat = b.dataset.v; render(); },
+    'inv-wa': function (b) {
+      var iv = state.invoices[b.dataset.id]; if (!iv) return;
+      var cu = iv.customerId && state.customers[iv.customerId], ph = String((cu && cu.phone) || '').replace(/[^0-9]/g, '');
+      if (ph.indexOf('00') === 0) ph = ph.slice(2); else if (ph.charAt(0) === '0') ph = '20' + ph.slice(1);
+      window.open('https://wa.me/' + ph + '?text=' + encodeURIComponent(waText(iv)), '_blank');
+    },
+    'gs-inv': function (b) { ACTS['open-inv'](b); },
+    'gs-cust': function (b) { ACTS['edit-cust'](b); },
+    'gs-item': function (b) { closeModal(); setTab('stock'); ACTS['open'](b); },
+    'bk-dl': function (b) { idbGet(b.dataset.day).then(function (r) { if (r) return saDownload({ filename: 'daftar-backup-' + r.day + '.json', data: new Blob([r.json], { type: 'application/json' }) }); }); },
     'open': function (b) { state.detail = b.dataset.id; state.sel = null; state.confirm = null; render(); window.scrollTo(0, 0); },
     'back': function () { state.detail = null; state.confirm = null; render(); },
     'sel': function (b) { state.sel = { c: b.dataset.c, s: b.dataset.s }; render(); },
@@ -3729,6 +3778,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
     't-per': function (b) { state.tper = b.dataset.v; render(); },
     'sample': loadSample,
     'new-inv': function () {
+      if (offBlock('الفواتير')) return;
       if (!arr(state.items).length) { toast('ضيف أصناف في المخزون الأول.'); return; }
       var c = state.invcust && state.customers[state.invcust];
       state.invdraft = newInvDraft(null, c ? c.name : '');
@@ -3855,6 +3905,8 @@ form { display: flex; flex-direction: column; gap: 14px; }
     ev.preventDefault();
     if (state.saving) return;
     var k = ev.target.dataset.kind;
+    if ({ invoice: 'حفظ الفواتير', cancel: 'إلغاء الفواتير', void: 'إلغاء العمليات', clear: 'المسح', ordship: 'تسليم الأوردرات', orddeliver: 'تسليم الأوردرات', ordret: 'المرتجعات', ordrcv: 'استلام المرتجعات' }[k] && offBlock({ invoice: 'الفواتير', cancel: 'إلغاء الفواتير', void: 'إلغاء العمليات', clear: 'المسح', ordship: 'تسليم الأوردرات', orddeliver: 'تسليم الأوردرات', ordret: 'المرتجعات', ordrcv: 'استلام المرتجعات' }[k])) return;
+    if (k === 'move' && ev.target.dataset.type !== 'in' && offBlock('حركات المخزون غير الوارد (صادر وجرد وهدايا)')) return;
     if (k === 'item') saveItem(); else if (k === 'move') saveMove(ev.target); else if (k === 'invoice') saveInvoice(); else if (k === 'cust') saveCust(ev.target); else if (k === 'pay') savePay(); else if (k === 'spay') saveSupPay(); else if (k === 'cancel') saveCancel(); else if (k === 'refund') saveRefund(); else if (k === 'purchase') savePurchase(); else if (k === 'void') saveVoid(); else if (k === 'clear') saveClear(); else if (k === 'sup') saveSup(); else if (k === 'tm') saveTm(); else if (k === 'ordship') saveOrdShip(); else if (k === 'orddeliver') saveOrdDeliver(); else if (k === 'ordsettle') saveSettle(); else if (k === 'ordret') saveOrdReturn(); else if (k === 'ordrcv') saveOrdRcv(); else saveMoney(ev.target);
   });
   document.addEventListener('input', function (ev) {
@@ -3876,6 +3928,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
         paintInv(cl.size ? 'l-qty-' + ck : 'l-st-' + ck + '-0');
       }
     }
+    else if (state.modal === 'gsearch') { gsUpdate(); }
     else if (state.modal === 'ordret') { updateRetHint(); }
     else if (state.modal === 'ordrcv') { if (t.id === 'r-loss') t.dataset.man = '1'; updateRcv(); }
     else if (state.modal === 'invoice') { if (t.id === 'v-cname') updateCinfo(); updateInvLive(); }
@@ -3946,6 +3999,52 @@ form { display: flex; flex-direction: column; gap: 14px; }
     if (c === 'auth/user-disabled') return 'الحساب ده متوقف.';
     return 'مقدرتش أسجّل الدخول (' + (c || 'خطأ') + ').';
   }
+  function gsHtml() {
+    return '<div><h2 id="mtitle">بحث</h2><div class="field"><label for="gs-q">فاتورة (رقم / عميل / بوليصة) أو عميل أو صنف</label><input id="gs-q" type="search" autocomplete="off"></div><div id="gs-res"><p class="meta">اكتب حرفين على الأقل.</p></div><div class="mact"><button type="button" class="btn" data-act="close">إغلاق</button></div></div>';
+  }
+  function gsUpdate() {
+    var q = String(($('#gs-q') || {}).value || '').trim().toLowerCase().replace(/^#/, ''), box = $('#gs-res'); if (!box) return;
+    if (q.length < 2 && !/^\d+$/.test(q)) { box.innerHTML = '<p class="meta">اكتب حرفين على الأقل.</p>'; return; }
+    var has = function (a) { return String(a || '').toLowerCase().indexOf(q) !== -1; };
+    var iv = arr(state.invoices).filter(function (x) { var c = state.customers[x.customerId]; return has(invNo(x.no)) || has(custNameOf(x)) || has(x.waybill) || has(c && c.phone); }).sort(function (a, b) { return (b.no || 0) - (a.no || 0); }).slice(0, 8);
+    var cu = arr(state.customers).filter(function (c) { return has(c.name) || has(c.phone); }).slice(0, 6);
+    var it = arr(state.items).filter(function (i) { return has(i.name) || has(i.cat); }).slice(0, 6);
+    var h = '';
+    var sec = function (t, list) { return list.length ? '<h3 style="font-size:14px;margin:14px 0 4px">' + t + '</h3><ul class="list">' + list.join('') + '</ul>' : ''; };
+    h += sec('فواتير', iv.map(function (x) { return '<li class="mrow"><div><b><bdi>' + invNo(x.no) + '</bdi></b> · ' + esc(custNameOf(x) || 'عميل نقدي') + (x.status === 'cancelled' ? ' <span class="pill p-out">ملغية</span>' : '') + (x.ret ? ' <span class="pill p-low">مرتجع</span>' : '') + '<div class="meta"><bdi>' + showDate(x.date) + '</bdi> · ' + money(x.total || 0) + '</div></div><div class="rowact"><button type="button" class="btn sm" data-act="gs-inv" data-id="' + x.id + '">فتح</button></div></li>'; }));
+    h += sec('عملاء', cu.map(function (c) { return '<li class="mrow"><div><b>' + esc(c.name) + '</b><div class="meta">' + esc(c.phone || '') + '</div></div><div class="rowact"><button type="button" class="btn sm" data-act="gs-cust" data-id="' + c.id + '">فتح</button></div></li>'; }));
+    h += sec('أصناف', it.map(function (i) { return '<li class="mrow"><div><b>' + esc(i.name) + '</b><div class="meta">' + esc(i.cat || '') + '</div></div><div class="rowact"><button type="button" class="btn sm" data-act="gs-item" data-id="' + i.id + '">فتح</button></div></li>'; }));
+    box.innerHTML = h || '<p class="empty">مفيش نتايج.</p>';
+  }
+  function idbOpen() {
+    return new Promise(function (res, rej) {
+      try { var r = indexedDB.open('daftar-bk', 1); r.onupgradeneeded = function () { r.result.createObjectStore('b', { keyPath: 'day' }); }; r.onsuccess = function () { res(r.result); }; r.onerror = function () { rej(r.error); }; } catch (e) { rej(e); }
+    });
+  }
+  function idbTx(mode, fn) { return idbOpen().then(function (db) { return new Promise(function (res, rej) { var tx = db.transaction('b', mode), out = fn(tx.objectStore('b')); tx.oncomplete = function () { res(out && out.result); }; tx.onerror = function () { rej(tx.error); }; }); }); }
+  function idbGet(day) { return idbTx('readonly', function (s) { return s.get(day); }); }
+  function idbAll() { return idbTx('readonly', function (s) { return s.getAll(); }); }
+  function idbPut(rec) { return idbTx('readwrite', function (s) { return s.put(rec); }); }
+  function idbDel(day) { return idbTx('readwrite', function (s) { return s.delete(day); }); }
+  function saAuto() {
+    if (SA.auto || !SA.fs) return; SA.auto = true;
+    idbGet(today()).then(function (ex) {
+      if (ex) return;
+      var out = { app: 'daftar-mahal', at: new Date().toISOString(), data: {} };
+      return Promise.all(COLS.map(function (c) { return SA.fs.collection(c).get().then(function (snap) { var m = {}; snap.docs.forEach(function (d) { m[d.id] = d.data(); }); out.data[c] = m; }); }))
+        .then(function () { return idbPut({ day: today(), json: JSON.stringify(out) }); })
+        .then(function () { return idbAll(); })
+        .then(function (all) { all.map(function (r) { return r.day; }).sort().reverse().slice(7).forEach(function (d) { idbDel(d); }); });
+    }).catch(function () {});
+  }
+  function bkModal() {
+    idbAll().then(function (all) {
+      all.sort(function (a, b) { return a.day < b.day ? 1 : -1; });
+      openModal('<div><h2 id="mtitle">النسخ التلقائية على الجهاز ده</h2><p class="meta">بتتحفظ نسخة كل يوم أول ما تفتح البرنامج، وبنحتفظ بآخر 7 أيام. دي محفوظة على المتصفح ده بس. لو عاوز تسترجع نسخة: نزّلها وبعدين «استيراد».</p><ul class="list">' +
+        (all.length ? all.map(function (r) { return '<li class="mrow"><div><bdi>' + showDate(r.day) + '</bdi><div class="meta"><bdi>' + Math.round(r.json.length / 1024) + '</bdi> ك.ب</div></div><div class="rowact"><button type="button" class="btn sm" data-act="bk-dl" data-day="' + r.day + '">تنزيل</button></div></li>'; }).join('') : '<li class="meta">لسه مفيش نسخ. هتتعمل أول نسخة دلوقتي.</li>') +
+        '</ul><div class="mact"><button type="button" class="btn" data-act="close">إغلاق</button></div></div>', 'bk');
+    }).catch(function () { toast('المتصفح مش مسمّح بالتخزين المحلي.'); });
+  }
   function saDownload(o) {
     return new Promise(function (res, rej) {
       try {
@@ -3997,6 +4096,22 @@ form { display: flex; flex-direction: column; gap: 14px; }
     }).catch(function (e) { toast('الاستيراد فشل: ' + ((e && e.code) || (e && e.message) || '')); })
       .then(function () { SA.busy = false; saEl('sa-file').value = ''; });
   }
+  function saOffUI() {
+    var el = saEl('sa-off'); if (!el) return;
+    var pend = 0; Object.keys(state.pend || {}).forEach(function (c) { pend += state.pend[c]; });
+    if (SA.online === false) { el.hidden = false; el.innerHTML = '<b>إنت أوفلاين.</b> الفواتير وحركات المخزون (غير الوارد) والتسليم والمرتجع مقفولة لحد ما النت يرجع. باقي العمليات بتتحفظ وتتبعت لوحدها.' + (pend ? ' <bdi>' + pend + '</bdi> عملية مستنية الإرسال.' : ''); }
+    else if (pend > 0) { el.hidden = false; el.innerHTML = 'بيتبعت <bdi>' + pend + '</bdi> عملية للسيرفر…'; }
+    else el.hidden = true;
+  }
+  function saSetOn(v) { if (SA.online === v) return; SA.online = v; saOffUI(); if (v) render(); }
+  function saPing() {
+    if (!navigator.onLine) { SA.fails = 9; saSetOn(false); return; }
+    var c = window.AbortController ? new AbortController() : null, t = setTimeout(function () { if (c) c.abort(); }, 5000);
+    fetch('https://firestore.googleapis.com/', { mode: 'no-cors', cache: 'no-store', signal: c ? c.signal : undefined })
+      .then(function () { SA.fails = 0; saSetOn(true); })
+      .catch(function () { SA.fails = (SA.fails || 0) + 1; if (SA.fails >= 2) saSetOn(false); })
+      .then(function () { clearTimeout(t); });
+  }
   function saRemind() {
     var el = saEl('sa-remind'); if (!el) return;
     var last = ''; try { last = localStorage.getItem('daftar-last-backup') || ''; } catch (e) {}
@@ -4007,8 +4122,12 @@ form { display: flex; flex-direction: column; gap: 14px; }
     var bar = document.createElement('div'); bar.id = 'sa-bar';
     bar.innerHTML = '<button type="button" class="btn sm" id="sa-bk">نسخة احتياطية</button>' +
       '<button type="button" class="btn sm ghost" id="sa-imp">استيراد</button>' +
+      '<button type="button" class="btn sm ghost" id="sa-gs">بحث</button><button type="button" class="btn sm ghost" id="sa-auto">نسخ تلقائية</button>' +
       '<button type="button" class="btn sm ghost" id="sa-out">خروج</button><span class="who"></span>';
     saEl('sync').parentNode.appendChild(bar);
+    var of = document.createElement('div'); of.id = 'sa-off'; of.hidden = true; saEl('sync').parentNode.appendChild(of);
+    window.addEventListener('online', function () { SA.fails = 0; saPing(); }); window.addEventListener('offline', function () { SA.fails = 9; saSetOn(false); });
+    setInterval(saPing, 10000); saPing();
     var rm = document.createElement('div'); rm.id = 'sa-remind'; rm.hidden = true;
     rm.innerHTML = '<span>لسه مأخدتش نسخة احتياطية النهاردة.</span><button type="button" class="btn sm" id="sa-rbk">خدها دلوقتي</button>';
     saEl('sync').parentNode.appendChild(rm);
@@ -4017,6 +4136,9 @@ form { display: flex; flex-direction: column; gap: 14px; }
     document.addEventListener('visibilitychange', function () { if (!document.hidden) saRemind(); });
     bar.querySelector('.who').textContent = email || '';
     saEl('sa-bk').addEventListener('click', saBackup);
+    saEl('sa-gs').addEventListener('click', function () { openModal(gsHtml(), 'gsearch'); });
+    saEl('sa-auto').addEventListener('click', bkModal);
+    var wt = setInterval(function () { if (COLS.every(function (c) { return state.loaded[c]; })) { clearInterval(wt); saAuto(); } }, 2500);
     saEl('sa-imp').addEventListener('click', function () { saEl('sa-file').click(); });
     saEl('sa-out').addEventListener('click', function () { SA.auth.signOut().then(function () { location.reload(); }); });
     saEl('sa-file').addEventListener('change', function (e) { saImport(e.target.files && e.target.files[0]); });
@@ -4028,6 +4150,7 @@ form { display: flex; flex-direction: column; gap: 14px; }
   } else {
     firebase.initializeApp(FBC);
     SA.auth = firebase.auth(); SA.fs = firebase.firestore();
+    try { if (SA.fs.enablePersistence) SA.fs.enablePersistence({ synchronizeTabs: true }).catch(function () {}); } catch (e) {}
     saEl('sa-form').addEventListener('submit', function (ev) {
       ev.preventDefault();
       var em = saEl('sa-email').value.trim(), pw = saEl('sa-pass').value;
